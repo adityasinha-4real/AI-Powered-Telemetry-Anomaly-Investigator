@@ -61,7 +61,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The app opens automatically at **http://localhost:8501**
+The app opens automatically at **//**
 
 ---
 
