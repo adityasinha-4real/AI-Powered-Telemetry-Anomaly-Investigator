@@ -104,8 +104,8 @@ Drop sample files into the `data/` folder for easy access.
 
 | Day | Focus |
 |---|---|
-| ✅ Day 1 | Data ingestion, profiling, interactive visualisation |
-| Day 2 | Statistical anomaly detection (Z-score, IQR) |
-| Day 3 | ML-based detection (Isolation Forest, DBSCAN) |
-| Day 4 | Alerting, export, and reporting |
-| Day 5 | LLM-powered investigation assistant |
+| 1 | Data ingestion, profiling, interactive visualisation |
+| 2 | Statistical anomaly detection (Z-score, IQR) |
+| 3 | ML-based detection (Isolation Forest, DBSCAN) |
+| 4 | Alerting, export, and reporting |
+| 5 | LLM-powered investigation assistant |
