@@ -1,6 +1,7 @@
 """
-AI Telemetry Anomaly Investigator — Day 1
-Streamlit dashboard for ingesting, profiling, and visualising telemetry CSV data.
+AI Telemetry Anomaly Investigator — Day 1 + Day 2
+Streamlit dashboard for ingesting, profiling, visualising, and detecting
+anomalies in telemetry CSV data.
 """
 
 from __future__ import annotations
@@ -10,6 +11,8 @@ from typing import Optional
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+
+from utils.anomaly import build_anomaly_table
 
 # ── Page config (must be the very first Streamlit call) ──────────────────────
 st.set_page_config(
@@ -27,6 +30,8 @@ CHART_PALETTE = [
     "#3b82f6", "#f59e0b", "#10b981", "#ef4444",
     "#8b5cf6", "#06b6d4", "#f97316", "#ec4899",
 ]
+ANOMALY_COLOR = "#ef4444"
+DETECTION_METHODS = ["Z-Score", "IQR"]
 
 
 # ── Styling ──────────────────────────────────────────────────────────────────
@@ -416,7 +421,8 @@ def build_line_chart(
 def render_sidebar(profile: Optional[dict], all_cols: list[str]) -> tuple:
     """
     Render sidebar controls.
-    Returns (uploaded_file, x_column, selected_y_columns).
+    Returns (uploaded_file, x_column, selected_y_columns,
+             detection_method, anomaly_columns, zscore_threshold).
     Decoupled from DataFrame loading — returns the raw file object only.
     """
     st.sidebar.markdown("## 📡 Telemetry Investigator")
@@ -435,6 +441,9 @@ def render_sidebar(profile: Optional[dict], all_cols: list[str]) -> tuple:
 
     x_column: Optional[str] = None
     selected_y_columns: list[str] = []
+    detection_method: str = DETECTION_METHODS[0]
+    anomaly_columns: list[str] = []
+    zscore_threshold: float = 3.0
 
     if profile is not None:
         numeric_cols = profile["numeric_cols"]
@@ -458,6 +467,37 @@ def render_sidebar(profile: Optional[dict], all_cols: list[str]) -> tuple:
         else:
             st.sidebar.caption("No numeric columns detected in this dataset.")
 
+        # ── Anomaly Detection Controls ────────────────────────────────────────
+        st.sidebar.markdown("---")
+        st.sidebar.markdown('<p class="sidebar-heading">Anomaly Detection</p>', unsafe_allow_html=True)
+
+        detection_method = st.sidebar.selectbox(
+            "Detection Method",
+            options=DETECTION_METHODS,
+            help="Z-Score uses standard deviations from the mean. IQR uses interquartile fencing.",
+        )
+
+        if numeric_cols:
+            anomaly_columns = st.sidebar.multiselect(
+                "Columns to inspect",
+                options=numeric_cols,
+                default=numeric_cols,
+                help="Select numeric columns to scan for anomalies.",
+            )
+        else:
+            st.sidebar.caption("No numeric columns available for anomaly detection.")
+
+        if detection_method == "Z-Score":
+            zscore_threshold = st.sidebar.slider(
+                "Z-Score threshold",
+                min_value=1.0,
+                max_value=6.0,
+                value=3.0,
+                step=0.1,
+                help="Flag observations where |z-score| exceeds this value.",
+            )
+
+        # ── Column Summary ────────────────────────────────────────────────────
         st.sidebar.markdown("---")
         st.sidebar.markdown('<p class="sidebar-heading">Column Summary</p>', unsafe_allow_html=True)
         st.sidebar.dataframe(
@@ -466,7 +506,14 @@ def render_sidebar(profile: Optional[dict], all_cols: list[str]) -> tuple:
             hide_index=True,
         )
 
-    return uploaded_file, x_column, selected_y_columns
+    return (
+        uploaded_file,
+        x_column,
+        selected_y_columns,
+        detection_method,
+        anomaly_columns,
+        zscore_threshold,
+    )
 
 
 # ── Main page render functions ────────────────────────────────────────────────
@@ -474,9 +521,9 @@ def render_header(filename: Optional[str]) -> None:
     """Page title and contextual subtitle."""
     st.markdown('<div class="page-title">AI Telemetry Anomaly Investigator</div>', unsafe_allow_html=True)
     subtitle = (
-        f"Day 1 — Data Ingestion &amp; Profiling &nbsp;·&nbsp; <b>{filename}</b>"
+        f"Day 2 — Anomaly Detection &nbsp;·&nbsp; <b>{filename}</b>"
         if filename
-        else "Day 1 — Data Ingestion &amp; Profiling &nbsp;·&nbsp; Upload a CSV to begin."
+        else "Day 2 — Anomaly Detection &nbsp;·&nbsp; Upload a CSV to begin."
     )
     st.markdown(f'<div class="page-subtitle">{subtitle}</div>', unsafe_allow_html=True)
 
@@ -578,6 +625,108 @@ def render_chart(
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_anomaly_metrics(anomaly_df: pd.DataFrame, method: str) -> None:
+    """Four KPI cards summarising anomaly detection results."""
+    st.markdown('<div class="section-label">Anomaly Detection Summary</div>', unsafe_allow_html=True)
+
+    total_anomalies = len(anomaly_df)
+    unique_rows = anomaly_df["row_index"].nunique() if total_anomalies else 0
+    affected_cols = anomaly_df["column"].nunique() if total_anomalies else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.metric("Total Anomalies", f"{total_anomalies:,}")
+    with c2:
+        st.metric("Anomalous Rows", f"{unique_rows:,}")
+    with c3:
+        st.metric("Affected Columns", f"{affected_cols:,}")
+    with c4:
+        st.metric("Detection Method", method)
+
+
+def render_anomaly_table(anomaly_df: pd.DataFrame) -> None:
+    """Display the anomaly results table and download button."""
+    st.markdown('<div class="section-label">Anomaly Results</div>', unsafe_allow_html=True)
+
+    if anomaly_df.empty:
+        st.success("✓ No anomalies detected with the current settings.")
+        return
+
+    st.dataframe(
+        anomaly_df,
+        use_container_width=True,
+        hide_index=True,
+        height=320,
+    )
+
+    csv_bytes = anomaly_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="⬇ Download Anomaly Report",
+        data=csv_bytes,
+        file_name="anomaly_report.csv",
+        mime="text/csv",
+        help="Export the full anomaly table as a CSV file.",
+    )
+
+
+def render_chart_with_anomalies(
+    df: pd.DataFrame,
+    x_column: Optional[str],
+    selected_y_columns: list[str],
+    anomaly_df: pd.DataFrame,
+) -> None:
+    """
+    Interactive Plotly line chart with anomaly points overlaid in red.
+    Preserves the original Day 1 line chart; anomaly markers are added on top.
+    """
+    st.markdown('<div class="section-label">Signal Viewer</div>', unsafe_allow_html=True)
+
+    if not selected_y_columns:
+        st.info("Select at least one numeric signal from the sidebar to display the chart.")
+        return
+
+    # Build the base line chart (reuses cached builder)
+    fig = build_line_chart(df, tuple(selected_y_columns), x_column)
+
+    # Overlay anomaly scatter traces — one per column present in the anomaly table
+    if not anomaly_df.empty:
+        x_values_full = df[x_column] if x_column else df.index
+
+        for col in anomaly_df["column"].unique():
+            if col not in selected_y_columns:
+                continue  # only annotate visible signals
+
+            col_anomalies = anomaly_df[anomaly_df["column"] == col]
+            row_indices = col_anomalies["row_index"].tolist()
+            anom_x = [x_values_full.iloc[r] if x_column else r for r in row_indices]
+            anom_y = col_anomalies["value"].tolist()
+
+            fig.add_trace(
+                go.Scatter(
+                    x=anom_x,
+                    y=anom_y,
+                    mode="markers",
+                    name=f"{col} anomaly",
+                    marker=dict(
+                        color=ANOMALY_COLOR,
+                        size=9,
+                        symbol="circle",
+                        line=dict(color="#ffffff", width=1.5),
+                    ),
+                    customdata=list(zip(row_indices, col_anomalies["value"].tolist(), [col] * len(row_indices))),
+                    hovertemplate=(
+                        "<b>⚠ Anomaly</b><br>"
+                        "Row: %{customdata[0]}<br>"
+                        "Column: %{customdata[2]}<br>"
+                        "Value: %{customdata[1]:.4f}"
+                        "<extra></extra>"
+                    ),
+                )
+            )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_empty_state() -> None:
     """Onboarding card shown before any file is uploaded."""
     st.markdown(
@@ -612,7 +761,14 @@ def main() -> None:
 
     # Sidebar (needs profile + col list for controls)
     all_cols = df.columns.tolist() if df is not None else []
-    uploaded_file, x_column, selected_y_columns = render_sidebar(profile, all_cols)
+    (
+        uploaded_file,
+        x_column,
+        selected_y_columns,
+        detection_method,
+        anomaly_columns,
+        zscore_threshold,
+    ) = render_sidebar(profile, all_cols)
 
     # Handle new upload — update session state, invalidate cached profile
     if uploaded_file is not None:
@@ -629,6 +785,7 @@ def main() -> None:
         render_empty_state()
         return
 
+    # ── Day 1 sections (unchanged) ────────────────────────────────────────────
     render_metrics(profile)
     st.divider()
     render_data_quality(profile)
@@ -637,7 +794,29 @@ def main() -> None:
     st.divider()
     render_descriptive_stats(profile)
     st.divider()
-    render_chart(df, x_column, selected_y_columns)
+
+    # ── Day 2 sections ────────────────────────────────────────────────────────
+    if not profile["numeric_cols"]:
+        st.warning("No numeric columns found — anomaly detection requires at least one numeric column.")
+        render_chart(df, x_column, selected_y_columns)
+        return
+
+    # Run anomaly detection (guard against empty column selection)
+    if anomaly_columns:
+        anomaly_df = build_anomaly_table(
+            df,
+            anomaly_columns,
+            detection_method,
+            threshold=zscore_threshold,
+        )
+    else:
+        anomaly_df = build_anomaly_table(df, [], detection_method)
+
+    render_anomaly_metrics(anomaly_df, detection_method)
+    st.divider()
+    render_anomaly_table(anomaly_df)
+    st.divider()
+    render_chart_with_anomalies(df, x_column, selected_y_columns, anomaly_df)
 
 
 if __name__ == "__main__":
